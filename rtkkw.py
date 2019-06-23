@@ -1,26 +1,44 @@
-﻿#
+#
 # Copyright: Robert Polz <robert.polz.cz@gmail.com>
 # Batch-mode optimized by Vempele
+# Vocab, links, override, maintenacne: KanjiEater
 # License: GNU GPL, version 3 or later; http://www.gnu.org/copyleft/gpl.html
 #
 # Automatic RTK keyword generation.
 #
 
-from PyQt4.QtCore import *
-from PyQt4.QtGui import *
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+from PyQt5.QtWidgets import QAction
+
 from anki.hooks import addHook
 from aqt import mw
 from aqt.utils import showInfo
+from anki.utils import stripHTML
+import re 
 
 srcFields = ['Reading']
-dstFields = ['Keyword']
-rtkModel = 'Japanese Heisigs RTK all-in-one'
+dstFields = ['Keywords']
+rtkModel = 'Japanese Writing'
 rtkKanjiField = 'Kanji'
 rtkKeywordField = 'Heisig Keyword'
-
+vocabField = 'KanjiVocabAnswer'
+kanjiUrl = 'http://kanji.koohii.com/study/kanji/'
+vocabUrl= 'https://jisho.org/search/'
+OVERRIDE = True # Regenerate over existing content. USE WITH CAUTION!
 # getKeywords
 ##########################################################################
 cache = {}
+
+def getMessage(note):
+    kanji = note[rtkKanjiField]
+    keyword = note[rtkKeywordField]
+    message = "<a title='{}' href='{}{}'>{} - {}</a><br>".format(keyword, kanjiUrl, kanji, kanji, keyword)
+    if note[vocabField]:
+        search_string = re.sub("\[.*?\]", '', stripHTML(note[vocabField]))
+        message = "<a title='{}' href='{}{}'>{} - {}</a><br>".format(keyword, vocabUrl, search_string, kanji, note[vocabField])
+    return message, kanji
+
 def generateCache():
     global cache
     model = mw.col.models.byName(rtkModel)
@@ -28,9 +46,7 @@ def generateCache():
     ids = mw.col.findNotes(mf)
     for id in ids:
         note = mw.col.getNote(id)
-        kanji = note[rtkKanjiField]
-        keyword = note[rtkKeywordField]
-        message = "<a href='http://kanji.koohii.com/study/kanji/"+kanji+"'>" + kanji + " - " + keyword + "</a><br>"
+        (message, kanji) = getMessage(note)
         if kanji in cache:
             cache[kanji] += message
         else:
@@ -46,15 +62,16 @@ def getKeywordsFast(expression):
 def getKeywords(expression):
     model = mw.col.models.byName(rtkModel)
     mf = "mid:" + str(model['id'])
-    kw = ""
+    message = ""
     for e in expression:
         ef = rtkKanjiField + ":" + e
         f = mf + " " + ef
         ids = mw.col.findNotes(f)
         for id in ids:
             note = mw.col.getNote(id)
-            kw = kw + e + " - " + note[rtkKeywordField] + "<br>"
-    return kw
+            (m, kanji) = getMessage(note)
+            message += m
+    return message
 
 # Focus lost hook
 ##########################################################################
@@ -86,7 +103,7 @@ def onFocusLost(flag, n, fidx):
     # update field
     try:
         n[dst] = getKeywords(srcTxt)
-    except Exception, e:
+    except Exception as e:
         raise
     return True
 
@@ -115,7 +132,7 @@ def regenerateKeywords(nids):
         if not dst:
             # no dst field
             continue
-        if note[dst]:
+        if note[dst] and not OVERRIDE:
             # already contains data, skip
             continue
         srcTxt = mw.col.media.strip(note[src])
@@ -123,7 +140,7 @@ def regenerateKeywords(nids):
             continue
         try:
             note[dst] = getKeywordsFast(srcTxt)
-        except Exception, e:
+        except Exception as e:
             raise
         note.flush()
     mw.progress.finish()
@@ -133,12 +150,15 @@ def regenerateKeywords(nids):
 ##########################################################################
 
 def setupMenu(browser):
-    a = QAction("Bulk-add RTK Keywords", browser)
-    browser.connect(a, SIGNAL("triggered()"), lambda e=browser: onRegenerate(e))
-    browser.form.menuEdit.addSeparator()
-    browser.form.menuEdit.addAction(a)
-    if cache == {}:
-        generateCache()
+    try:
+        if cache == {}:
+            generateCache()
+        a = QAction("Bulk-add RTK Keywords", browser)
+        a.triggered.connect(lambda: onRegenerate(browser))
+        browser.form.menuEdit.addSeparator()
+        browser.form.menuEdit.addAction(a)
+    except Exception as e:
+        showInfo('Failed to generate cache, does your model exist?')
 
 def onRegenerate(browser):
     regenerateKeywords(browser.selectedNotes())
@@ -146,5 +166,5 @@ def onRegenerate(browser):
 # Init
 ##########################################################################
 
-addHook('editFocusLost', onFocusLost)
+# addHook('editFocusLost', onFocusLost) #sometimes it adds EEEEEEEEVerything
 addHook("browser.setupMenus", setupMenu)
